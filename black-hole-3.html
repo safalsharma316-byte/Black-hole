@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Black Hole 3D</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:dark}
+html,body{height:100%;margin:0;background:#000;overflow:hidden;font-family:system-ui,-apple-system,sans-serif}
+canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none;display:block}
+#ui{position:fixed;left:0;right:0;bottom:0;padding:12px 12px calc(14px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}
+#ui *{pointer-events:auto}
+.row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+button{background:rgba(255,255,255,.1);color:#eee;border:1px solid rgba(255,255,255,.25);border-radius:20px;padding:8px 12px;font-size:13px;backdrop-filter:blur(6px)}
+button.on{background:#fff;color:#000}
+#hint{color:#9ab;font-size:12px;text-align:center}
+#fp{display:none;position:fixed;inset:0;z-index:9;background:rgba(0,0,8,.94);color:#dde;overflow-y:auto;padding:calc(16px + env(safe-area-inset-top,0px)) 16px 40px;font-size:14px;line-height:1.45}
+#fp h2{margin:0 0 4px;font-size:18px}#fp h3{margin:18px 0 6px;font-size:13px;color:#fb7;text-transform:uppercase;letter-spacing:.06em}
+#fp .f{font-family:ui-monospace,Menlo,monospace;background:rgba(255,255,255,.07);border-radius:8px;padding:8px 10px;margin:4px 0;font-size:13px;overflow-x:auto;white-space:pre}
+#fp p{margin:2px 0;color:#9ab;font-size:12px}
+#fx{position:sticky;top:0;float:right}
+#ov{pointer-events:none}#fp b{color:#fff}
+#menu{display:none;background:rgba(10,10,20,.9);border:1px solid rgba(255,255,255,.2);border-radius:14px;padding:10px;max-width:92vw}
+#hud{position:fixed;top:calc(10px + env(safe-area-inset-top,0px));left:0;right:0;text-align:center;color:#fb7;font-size:13px;pointer-events:none;text-shadow:0 0 6px #000;z-index:2}
+</style></head><body>
+<canvas id="c"></canvas><canvas id="ov"></canvas><div id="hud"></div>
+<div id="fp"><button id="fx">Close ✕</button>
+<h2>Equations used in this model</h2>
+<p>Units: Schwarzschild radius Rs = 1 (M = ½). Same formulas as in the shader code.</p>
+<h3>1 · Black hole geometry</h3>
+<div class="f">Rs = 2GM / c²   (Rs = 1)</div><p>Event horizon: ray with r &lt; 1 is absorbed (black).</p>
+<div class="f">r_photon = 1.5 Rs</div><p>Photon sphere: light orbits here (thin bright ring).</p>
+<div class="f">r_ISCO = 3 Rs</div><p>Innermost stable orbit: inner edge of the disk.</p>
+<h3>2 · Light bending (ray tracing)</h3>
+<div class="f">h = | r × v |   (conserved)
+a = −1.5 · h² · r / |r|⁵</div><p>Schwarzschild null geodesic in Cartesian form, used instead of straight rays.</p>
+<div class="f">v ← v + a·dt
+r ← r + v·dt
+dt = clamp(0.07·(|r| − 0.9), 0.012, 0.5)</div><p>Step-by-step integration with smaller steps near the hole.</p>
+<h3>3 · Accretion disk</h3>
+<div class="f">t = y₀ / (y₀ − y₁)
+p = p₀ + t·(p₁ − p₀)</div><p>Where a ray crosses the disk plane (y = 0); disk spans 3 &lt; r &lt; 11 (14 in Cinematic).</p>
+<div class="f">Ω(r) = 0.9 / r^1.5
+φ = atan2(z, x) + 1.5·T·Ω</div><p>Keplerian rotation: inner gas spins faster.</p>
+<div class="f">I = 5 · (3/r)^2.2 · (1 − √(3/r)) · texture</div><p>Brightness (Interstellar / Cinematic). EHT: I = 3 · (3/r)^1.3 · (1 − √(3/r)).</p>
+<h3>4 · Doppler beaming</h3>
+<div class="f">β = √(0.5 / (r − 0.8)) · ( t̂ · (−v̂) )
+t̂ = (−z, 0, x)</div><p>Orbital speed toward the viewer, as a fraction of light speed.</p>
+<div class="f">D = 1 / (1 − β)</div>
+<div class="f">EHT:        e = I · D⁴ · 0.9
+Cinematic:  e = I · D^2.2 · 1.1
+Interstellar: I · 3 · (1 + 0.5(D − 1))</div><p>Approaching side gets brighter, receding side dimmer.</p>
+<h3>5 · Image</h3>
+<div class="f">col += (1 − α)·c·a
+α += (1 − α)·a</div><p>Alpha blending of the disk layers (a ≈ 0.85–0.97).</p>
+<div class="f">out = (1 − e^(−1.3·col))^0.9</div><p>Tone mapping + gamma. Blur is a CSS Gaussian blur.</p>
+<p style="margin-top:16px">Simplified: non-spinning (Schwarzschild) black hole. The real Gargantua uses spinning Kerr geometry.</p>
+</div>
+<div id="ui">
+<div id="menu" class="row"><button id="m2">Cinematic</button><button id="m0" class="on">Interstellar</button><button id="m1">EHT</button><button id="th">🧍 Throw human</button><button id="sb">Spaghettification</button><button id="lb">Layers</button><button id="fm">Formulas</button></div>
+<div class="row"><button id="more">☰ More</button></div>
+<div class="row" style="align-items:center;color:#cde;font-size:13px;gap:10px">Blur <input type="range" id="bl" min="0" max="20" value="0" style="width:160px"></div>
+<div id="hint">Drag to orbit · scroll / pinch to zoom</div>
+</div>
+<script>
+const cv=document.getElementById('c'),gl=cv.getContext('webgl');
+const vs='attribute vec2 p;void main(){gl_Position=vec4(p,0,1);}';
+const fs=`precision highp float;
+uniform vec2 R;uniform float T,mode,Q;uniform vec3 cp,cr,cu,cf;
+float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+float n(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
+return mix(mix(h(i),h(i+vec2(1,0)),f.x),mix(h(i+vec2(0,1)),h(i+vec2(1,1)),f.x),f.y);}
+vec3 stars(vec3 d){
+vec3 c=vec3(.004,.006,.014);
+for(int k=0;k<3;k++){float sc=60.+float(k)*70.;
+vec2 u=vec2(atan(d.z,d.x)*sc,asin(d.y)*sc*2.);
+vec2 id=floor(u),f=fract(u)-.5;
+float m=step(.95+.015*float(k),h(id+float(k)*13.));
+float sz=h(id+5.)*.3+.08;
+float b=m*smoothstep(sz,0.,length(f))*(.6+h(id+9.));
+vec3 tint=mix(vec3(1.,.7,.5),vec3(.6,.75,1.),h(id+3.));
+c+=tint*b*(2.-.5*float(k));}
+float band=exp(-pow(dot(d,normalize(vec3(.3,.9,.2)))*4.,2.));
+float cl=n(d.xz*4.+d.y*3.)*.6+n(d.xz*11.)*.4;
+c+=band*cl*vec3(.25,.2,.3)*.6;
+c+=pow(n(d.yz*3.+7.),3.)*vec3(.05,.1,.25);
+return c;}
+void main(){
+vec2 uv=(gl_FragCoord.xy-.5*R)/R.y;
+vec3 d=normalize(cf*1.2+cr*uv.x+cu*uv.y);
+vec3 pos=cp,v=d,col=vec3(0);float al=0.;
+vec3 L=cross(pos,v);float h2=dot(L,L);
+for(int i=0;i<380;i++){
+float r=length(pos);
+if(float(i)>Q)break;
+if(r<1.){al=1.;break;}
+if(r>45.&&dot(pos,v)>0.)break;
+float dt=clamp(.06*(r-.9),.01,.5);
+vec3 old=pos;
+v+=-1.5*h2*pos/(r*r*r*r*r)*dt;
+pos+=v*dt;
+float rg=length(pos.xz);
+if(rg>2.8&&rg<12.){float hz=exp(-abs(pos.y)*1.5)*pow(3./rg,2.)*dt*.1*(.5+n(pos.xz*.9+pos.y*1.3+T*.15));col+=(1.-al)*(mode<.5?vec3(1.,.78,.58):vec3(1.,.3,.06))*hz;}
+if(old.y*pos.y<0.){
+float t=old.y/(old.y-pos.y);vec3 p=mix(old,pos,t);
+float rr=length(p.xz);
+if(rr>3.&&rr<14.){
+float om=.9/pow(rr,1.5);
+float ph=atan(p.z,p.x)-T*om*3.;
+float sw=mode>1.5?ph+2.4*log(rr):ph;vec2 pr=rr*vec2(cos(sw),sin(sw));float tex=0.,am=.5;vec2 q=pr*2.2;
+for(int j=0;j<5;j++){tex+=am*n(q);q=q*2.07+vec2(3.7,1.3);am*=.5;}
+tex=(.25+1.3*tex)*(.55+.9*n(vec2(rr*55.,2.)))*(.85+.3*n(vec2(rr*9.,5.)));
+if(mode>.5&&mode<1.5)tex=1.;
+if(mode<.5){float ds=n(pr*1.1+vec2(5.,2.))*.6+n(pr*3.3)*.4;tex=(.35+1.5*smoothstep(.25,.75,ds))*(.7+.6*n(vec2(rr*80.,3.)));}
+if(mode>1.5)tex*=.8+.5*n(pr*7.+T*.5);
+float I=pow(3./rr,mode>.5&&mode<1.5?1.3:2.2)*(1.-sqrt(3./rr))*(mode>.5&&mode<1.5?3.:5.)*tex;
+if(mode>.5){float hd=atan(p.z,p.x)-T*om*3.-2.;float hs=exp(-pow(sin(.5*hd),2.)*70.)*exp(-pow((rr-4.6)*1.5,2.));I*=sqrt(max(1.-1./rr,0.))*(1.+hs*4.);}
+float edge=smoothstep(3.,3.6,rr)*(1.-smoothstep(8.,mode<.5||mode>1.5?14.:11.,rr));
+vec3 tg=normalize(vec3(-p.z,0.,p.x));
+float beta=dot(tg,-normalize(v))*sqrt(.5/(rr-.8));
+float D=1./(1.-clamp(beta,-.9,.9));
+vec3 c;
+if(mode<.5){ // Interstellar: warm white, beaming mostly suppressed
+c=mix(vec3(.55,.2,.07),vec3(1.,.93,.82),clamp(I*.7+(3.4/rr-.35),0.,1.))*I*3.*(1.+.5*(D-1.));
+}else if(mode>1.5){ // Cinematic: fiery gold/orange
+float e=I*pow(D,2.2)*1.1;
+c=mix(vec3(.45,.06,.02),vec3(1.,.5,.1),clamp(e*.7,0.,1.));
+c=mix(c,vec3(1.,.92,.7),clamp(e*.35-.15,0.,1.))*e*1.4;
+}else{ // EHT: orange, strong Doppler beaming
+float e=I*pow(D,4.)*.9;
+c=vec3(1.,.3,.04)*e+vec3(1.,.75,.2)*e*e*.6;
+}
+float a=edge*(mode<.5?.97:.85);
+col+=(1.-al)*c*a;al+=(1.-al)*a;
+if(al>.99)break;
+}}
+}
+if(al<.99){col+=(1.-al)*stars(normalize(v));}
+// lens glow
+if(mode>1.5){vec2 fq=(gl_FragCoord.xy-.5*R)/R.y-vec2(-.14,-.11)*(14./length(cp));
+float ln=length(fq);
+float dd=dot(fq,vec2(-.6,.8));
+float st=exp(-abs(fq.y)*60.)*exp(-abs(fq.x)*2.2)*.5+exp(-abs(dd)*45.)*exp(-ln*3.)*.4;
+col+=vec3(1.,.85,.6)*exp(-ln*12.)*1.2+vec3(.35,.55,1.)*st;}
+if(mode<.5){vec2 bq=(gl_FragCoord.xy-.5*R)/R.y;col+=vec3(.5,.45,.4)*exp(-length(bq)*7.)*.08;}
+col=1.-exp(-col*1.3);
+col=pow(col,vec3(.9));
+vec2 vq=gl_FragCoord.xy/R-.5;col*=1.-.9*dot(vq,vq);
+col+=(h(gl_FragCoord.xy+T)-.5)*.02;
+gl_FragColor=vec4(col,1.);}`;
+function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);return o}
+const pr=gl.createProgram();gl.attachShader(pr,sh(gl.VERTEX_SHADER,vs));gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,fs));gl.linkProgram(pr);gl.useProgram(pr);
+const b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+const loc=gl.getAttribLocation(pr,'p');gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+const U=n=>gl.getUniformLocation(pr,n);
+let yaw=0,pitch=.17,dist=10,mode=0,sc=.85,Q=380,ema=16,lt=0,fc=0;
+function size(){const s=Math.min(devicePixelRatio,2)*sc;cv.width=innerWidth*s;cv.height=innerHeight*s;gl.viewport(0,0,cv.width,cv.height)}
+addEventListener('resize',size);size();
+let drag=false,lx,ly;
+cv.onpointerdown=e=>{drag=true;lx=e.clientX;ly=e.clientY;cv.setPointerCapture(e.pointerId)};
+cv.onpointerup=()=>drag=false;
+cv.onpointermove=e=>{if(!drag)return;yaw-=(e.clientX-lx)*.006;pitch=Math.max(-1.4,Math.min(1.4,pitch+(e.clientY-ly)*.006));lx=e.clientX;ly=e.clientY};
+cv.onwheel=e=>{dist=Math.max(8,Math.min(40,dist*(1+e.deltaY*.001)))};
+let pd=0;cv.addEventListener('touchmove',e=>{if(e.touches.length==2){const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);if(pd)dist=Math.max(8,Math.min(40,dist*pd/d));pd=d}},{passive:true});
+cv.addEventListener('touchend',()=>pd=0);
+['m0','m1','m2'].forEach((id,i)=>document.getElementById(id).onclick=()=>{mode=i;if(i==1){pitch=1.25;dist=18;bl.value=16}else{pitch=.17;dist=10;bl.value=0}bl.oninput();['m0','m1','m2'].forEach((k,j)=>document.getElementById(k).classList.toggle('on',j==i))});
+bl.oninput=()=>{const v=+bl.value;cv.style.filter=v?`blur(${v}px)`:'';cv.style.transform=v?`scale(${1+v*.006})`:''};
+const F=fp.innerHTML,CB='<button id="fx">Close ✕</button>';
+const show=h=>{fp.innerHTML=h;fp.style.display='block';fp.scrollTop=0};
+fm.onclick=()=>show(F);fp.onclick=e=>{if(e.target.id=='fx')fp.style.display='none'};
+const SP=`<h2>Spaghettification</h2><p>Gravity pulls harder on the part of you closer to the black hole than on the part farther away. That difference is called the <b>tidal force</b>.</p>
+<h3>How it works</h3>
+<div class="f">Δa ≈ 2GM · L / r³</div><p>L = your height, r = distance from the center. Feet-first, your feet feel more pull than your head, so you are <b>stretched</b> along the fall line. Sideways, gravity points to the center from slightly different angles, so you are <b>squeezed</b>.</p>
+<div class="f">At the horizon (r = 2GM/c²):
+Δa = c⁶ · L / (4 G² M²)</div><p>Smaller black hole = much stronger tide, because the horizon is closer to the center.</p>
+<h3>Real numbers (L ≈ 2 m)</h3>
+<div class="f">10 Suns:  ~2×10⁷ g  (torn apart before the horizon)
+4 million Suns (Sgr A*): ~10⁻⁴ g (you cross unharmed)</div><p>Huge black holes tear you apart only much deeper, near the singularity.</p>
+<h3>In this simulation</h3>
+<div class="f">stretch = 1 + 10 · (1/r)³
+squeeze = 1 / √stretch</div><p>The astronaut first tumbles, then tidal torque lines the body up along the fall line. Past ×3 stretch the body is pulled apart at its weak points (neck, waist, knees) into separate pieces, and the gaps grow faster than the pieces. The glow and red tint show heating and gravitational redshift. The human is drawn larger than real so you can see it, and the stretch is illustrative. Seen from outside, time dilation makes the person slow down, turn red and fade at the horizon. You never see them cross it. The marker is placed without light bending, so it is approximate near the hole.</p>`;
+const LY=`<h2>Every layer in the picture</h2><p>From back to front.</p>
+<h3>Space</h3>
+<p><b>Starfield</b> — 3 layers of stars of different size, color and density. Light bends around the hole, so stars curve.</p>
+<p><b>Milky Way band</b> — a faint cloud of distant stars across the sky.</p>
+<p><b>Nebula glow</b> — soft blue dust for depth.</p>
+<h3>Black hole</h3>
+<p><b>Event horizon / shadow</b> — the black center; any ray that falls inside r&lt;1 is absorbed.</p>
+<p><b>Photon ring</b> — thin bright ring of light that orbits the hole before escaping.</p>
+<p><b>Lensed disk image</b> — the far side of the disk, bent over the top and under the bottom.</p>
+<h3>Accretion disk</h3>
+<p><b>Disk (front image)</b> — the hot gas spiraling in, between 3 and 11 Rs.</p>
+<p><b>Turbulence texture</b> — noise streaks and thin rings that make the gas look real and rotate with it.</p>
+<p><b>Spiral swirl</b> — twists the streaks into arms (Cinematic).</p>
+<p><b>Hot spot</b> — an orbiting bright blob (EHT, Cinematic).</p>
+<p><b>Doppler beaming</b> — the side moving toward you is brighter.</p>
+<p><b>Gravitational redshift</b> — gas near the hole looks dimmer and redder.</p>
+<p><b>Volumetric haze</b> — glow around the disk that gives it thickness.</p>
+<h3>Camera effects</h3>
+<p><b>Lens flare</b> — blue-white streaks (Cinematic).</p>
+<p><b>Soft halo</b> — glow around the center (Interstellar).</p>
+<p><b>Tone mapping</b> — squeezes the very bright values so they do not clip.</p>
+<p><b>Vignette + film grain</b> — dark edges and fine noise for a camera look.</p>
+<p><b>Blur</b> — the slider; softens the picture (EHT uses it).</p>
+<h3>Interactive</h3>
+<p><b>Human overlay</b> — the person you throw in, drawn on top and stretched by the tidal formula.</p>`;
+sb.onclick=()=>show(CB+SP);lb.onclick=()=>show(CB+LY);th.onclick=throwH;more.onclick=()=>{menu.style.display=menu.style.display=='flex'?'none':'flex'};menu.onclick=e=>{if(e.target.tagName=='BUTTON')menu.style.display='none'};
+const OV=document.getElementById('ov'),cx=OV.getContext('2d'),HD=document.getElementById('hud');
+let LB=null,H=null,hl=0;
+const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+function throwH(){if(!LB)return;const n=a=>{const l=Math.hypot(...a);return a.map(x=>x/l)};
+const d=n(LB.F.map((x,i)=>-x*.5+LB.R[i]*.15+LB.U[i]*.1));
+const ax=n(LB.U.map((x,i)=>x*.7+LB.R[i]*.3));
+const k=dot(ax,d);const e2=n(ax.map((x,i)=>x-k*d[i]));
+H={r:9,ph:0,e1:d,e2,fade:1,done:false};hl=performance.now();fp.style.display='none'}
+function drawH(t,cp,Rv,Uv,Fv){
+LB={R:Rv,U:Uv,F:Fv};const W=innerWidth,Hh=innerHeight;
+if(OV.width!=W||OV.height!=Hh){OV.width=W;OV.height=Hh}
+cx.clearRect(0,0,W,Hh);
+if(!H){HD.textContent='';return}
+const dt=Math.min((t-hl)/1000,.05);hl=t;
+if(H.done){HD.textContent='Crossed the event horizon. Nothing can escape from here.';if(t-H.t0>4000)H=null;return}
+const g=Math.max(H.r-1,0)/H.r;
+H.r=Math.max(1,H.r-2.2*g*Math.sqrt(1.2/H.r)*dt);
+H.ph+=3.6/Math.pow(H.r,1.5)*dt*g;
+if(H.r<1.03){H.fade-=dt*.8;if(H.fade<=0){H.done=true;H.t0=t;return}}
+const sf=1+10/(H.r*H.r*H.r);
+const st=H.r>3?'Falling…':H.r>1.5?'Tidal force rising':H.r>1.08?'SPAGHETTIFICATION!':'Freezing at the horizon (outside view)';
+HD.textContent='r = '+H.r.toFixed(2)+' Rs · stretch ×'+sf.toFixed(1)+' · '+(sf>5&&H.r>1.08?'BODY TEARING APART':st)+' · tidal ≈ '+(2.1e7/Math.pow(H.r,3)).toExponential(1)+' g';
+const c=Math.cos(H.ph),s=Math.sin(H.ph);
+const P=[0,1,2].map(i=>H.r*(c*H.e1[i]+s*H.e2[i]));
+const v=P.map((x,i)=>x-cp[i]);const z=dot(v,Fv);
+if(z<.3)return;
+const k=1.2*Hh/z,sx=W/2+dot(v,Rv)*k,sy=Hh/2-dot(v,Uv)*k,ht=k*.9;
+H.tum=(H.tum||0)+dt*1.3;
+const rad=Math.atan2(Hh/2-sy,W/2-sx),wt=Math.min(1,(sf-1)/1.5);
+const da=((rad-H.tum)%6.2832+9.4248)%6.2832-3.1416;
+const al=Math.max(0,H.fade)*Math.min(1,Math.sqrt(g)*1.6+.15);
+const br=Math.min(1,Math.max(0,(sf-3)/4)),Ls=1+(sf-1)*(1-.7*br),SQ=1/Math.sqrt(sf);
+cx.save();cx.translate(sx,sy);cx.rotate(H.tum+da*wt);cx.globalAlpha=al;cx.lineCap='round';
+if(H.r<2.5){const R2=ht*sf*.6,gr=cx.createRadialGradient(0,0,0,0,0,R2);gr.addColorStop(0,'rgba(255,170,70,'+(.5*(1-H.r/2.5))+')');gr.addColorStop(1,'rgba(255,90,0,0)');cx.fillStyle=gr;cx.fillRect(-R2,-R2,2*R2,2*R2)}
+const seg=(a,l,w,y,col,dk)=>{const c0=a*sf*ht,h=l*.5*Ls*ht,wd=Math.max(1.2,w*ht*SQ),yy=y*ht*SQ;const gr=cx.createLinearGradient(0,yy-wd/2,0,yy+wd/2);gr.addColorStop(0,col);gr.addColorStop(1,dk||col);cx.strokeStyle=gr;cx.lineWidth=wd;cx.beginPath();cx.moveTo(c0-h,yy);cx.lineTo(c0+h,yy);cx.stroke()};
+seg(-.30,.30,.11,-.14,'#b7bdc8','#6b7380');seg(-.30,.14,.05,-.14,'#e8502a','#a8331a');
+seg(.12,.24,.075,-.035,'#dfe3ea','#98a0ad');seg(.35,.22,.065,-.035,'#d3d8e0','#8f97a4');seg(.48,.08,.075,-.035,'#59606c','#2f343c');
+seg(.12,.24,.075,.035,'#f4f6fa','#a9b1be');seg(.35,.22,.065,.035,'#e6e9f0','#9ea6b3');seg(.48,.08,.075,.035,'#6e7480','#383d46');
+seg(-.27,.30,.20,0,'#fbfcff','#aab2c0');seg(-.25,.09,.09,0,'#2f6fdd','#1b3f85');seg(-.25,.03,.04,0,'#ff9a3c');
+seg(-.28,.26,.06,.125,'#f1f3f8','#9aa2b0');seg(-.28,.26,.06,-.125,'#f1f3f8','#9aa2b0');
+seg(-.2,.03,.065,.125,'#e8502a');seg(-.2,.03,.065,-.125,'#e8502a');
+seg(-.145,.07,.07,.125,'#7b8392','#464c58');seg(-.145,.07,.07,-.125,'#7b8392','#464c58');
+seg(-.49,.12,.18,0,'#ffffff','#b5bcc9');seg(-.475,.075,.12,0,'#ffd27a','#8a5a12');seg(-.49,.03,.03,-.03,'rgba(255,255,255,.85)');
+cx.globalCompositeOperation='source-atop';cx.globalAlpha=Math.min(.8,(1-g)*.9)*al;cx.fillStyle='#ff3a10';cx.fillRect(-W,-W,2*W,2*W);
+cx.restore();return;
+cx.globalAlpha=Math.max(0,H.fade)*Math.min(1,Math.sqrt(g)*1.6+.15);
+cx.strokeStyle='#ffb347';cx.fillStyle='#ffe0b0';cx.lineCap='round';cx.lineWidth=.1;
+cx.beginPath();cx.arc(-.45,0,.08,0,6.3);cx.fill();
+cx.beginPath();[[-.36,0,-.02,0],[-.3,0,-.2,.2],[-.3,0,-.2,-.2],[-.02,0,.3,.1],[.3,.1,.45,.06],[-.02,0,.3,-.1],[.3,-.1,.45,-.06]].forEach(a=>{cx.moveTo(a[0],a[1]);cx.lineTo(a[2],a[3])});cx.stroke();
+cx.restore()}
+function cross(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]]}
+function nrm(a){const l=Math.hypot(...a);return a.map(x=>x/l)}
+function frame(t){
+const dm=Math.min(t-lt,100);lt=t;ema=ema*.9+dm*.1;fc++;
+if(fc>30&&fc%12==0){if(ema>22&&(sc>.3||Q>140)){sc=Math.max(.3,sc*.85);Q=Math.max(140,Q-50);ema=18;size()}else if(ema<14&&fc%48==0&&(sc<.85||Q<380)){sc=Math.min(.85,sc*1.07);Q=Math.min(380,Q+25);size()}}
+if(!drag)yaw+=.0006;
+const cp=[dist*Math.cos(pitch)*Math.sin(yaw),dist*Math.sin(pitch),dist*Math.cos(pitch)*Math.cos(yaw)];
+const f=nrm(cp.map(x=>-x)),r0=nrm(cross(f,[0,1,0])),u0=cross(r0,f),ro=mode!=1?1.0:1.5,cs=Math.cos(ro),sn=Math.sin(ro),r=r0.map((x,i)=>x*cs+u0[i]*sn),u=u0.map((x,i)=>x*cs-r0[i]*sn);
+gl.uniform2f(U('R'),cv.width,cv.height);gl.uniform1f(U('T'),t*.001);gl.uniform1f(U('mode'),mode);gl.uniform1f(U('Q'),Q);
+gl.uniform3fv(U('cp'),cp);gl.uniform3fv(U('cr'),r);gl.uniform3fv(U('cu'),u);gl.uniform3fv(U('cf'),f);
+gl.drawArrays(gl.TRIANGLES,0,3);drawH(t,cp,r,u,f);requestAnimationFrame(frame)}
+requestAnimationFrame(frame);
+</script></body></html>
